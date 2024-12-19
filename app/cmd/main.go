@@ -2,55 +2,42 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"net/http"
 	"os"
+	"pi-go/internals/handler"
 	"time"
 
-	"pi-server/internals/handler"
-
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
+var isSleeping = false
+
+func init() {
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
+}
+
 func main() {
+	botToken := os.Getenv("BOT_TOKEN")
+	channelID := os.Getenv("CHANNEL_ID")
+
 	go handler.StartFFMPEGThread()
-	StartUIServer("6619")
-}
+	go handler.StartStreamServer("6619")
+	var tgBot = handler.NewTelegramBot(botToken, channelID)
 
-func diskReact(uriPrefix, streamDir string) gin.HandlerFunc {
-	if _, err := os.Stat(streamDir); os.IsNotExist(err) {
-		log.Fatalf("Stream data directory does not exist: %v", streamDir)
-	}
+	handler.SubscribeForDistance(func(dist float64) {
+		if dist < 10 && !isSleeping {
+			go func() {
+				tgBot.SendMessage("<b>Warning</b>: Intruder detected!\n<b>Time</b>: " + time.Now().Format(time.RFC1123))
+				isSleeping = true
 
-	fileserver := http.FileServer(http.Dir(streamDir))
+				time.Sleep(20 * time.Second)
+				fmt.Println("Waking up...")
+				isSleeping = false
+			}()
+		}
+	})
 
-	if uriPrefix != "" {
-		fileserver = http.StripPrefix(uriPrefix, fileserver)
-	}
-
-	return func(c *gin.Context) {
-		fileserver.ServeHTTP(c.Writer, c.Request)
-		c.Abort()
-	}
-}
-
-func StartUIServer(port string) {
-	r := gin.Default()
-
-	r.Use(cors.New(cors.Config{
-		AllowAllOrigins: true,
-		AllowMethods:     []string{"GET", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
-	
-	r.Use(diskReact("/", handler.StreamPath))
-
-	fmt.Printf("Starting server on port %v\n", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatal(err)
-	}
+	select {}
 }
